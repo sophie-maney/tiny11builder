@@ -431,7 +431,8 @@ reg unload HKLM\zSCHEMA | Out-Null
 reg unload HKLM\zSOFTWARE
 reg unload HKLM\zSYSTEM | Out-Null
 Write-Host "Cleaning up image..."
-Repair-WindowsImage -Path $ScratchDisk\scratchdir -StartComponentCleanup -ResetBase
+# Repair-WindowsImage -Path $ScratchDisk\scratchdir -StartComponentCleanup -ResetBase
+& 'dism' '/English' "/image:$ScratchDisk\scratchdir" '/Cleanup-Image' '/StartComponentCleanup' '/ResetBase' | Out-Null
 Write-Host "Cleanup complete."
 Write-Host ' '
 Write-Host "Unmounting image..."
