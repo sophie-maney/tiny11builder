@@ -524,7 +524,7 @@ if ($ADKDepTools -and [System.IO.File]::Exists("$ADKDepTools\oscdimg.exe")) {
     $OSCDIMG = $localOSCDIMGPath
 }
 
-& "$OSCDIMG" '-m' '-o' '-u2' '-udfver102' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" "$PSScriptRoot\tiny11.iso"
+& "$OSCDIMG" '-m' '-o' '-u2' '-udfver200' "-bootdata:2#p0,e,b$ScratchDisk\tiny11\boot\etfsboot.com#pEF,e,b$ScratchDisk\tiny11\efi\microsoft\boot\efisys.bin" "$ScratchDisk\tiny11" "$PSScriptRoot\tiny11.iso"
 
 # Finishing up
 Write-Host "Creation completed! Press any key to exit the script..."
