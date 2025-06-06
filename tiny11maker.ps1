@@ -2,24 +2,26 @@
 #Set-PSDebug -Trace 1
 
 param (
-    [ValidatePattern('^[c-zC-Z]$')]
+    [ValidatePattern('^[c-zC-Z]:$')]
     [string]$ScratchDisk
 )
 
 if (-not $ScratchDisk) {
-    $ScratchDisk = $PSScriptRoot -replace '[\\]+$', ''
+    $ScratchDisk = ((Get-Location).Drive.Name) + ":"
 } else {
     $ScratchDisk = $ScratchDisk + ":"
 }
 
 Write-Output "Scratch disk set to $ScratchDisk"
 
-# Check if PowerShell execution is restricted
-if ((Get-ExecutionPolicy) -eq 'Restricted') {
-    Write-Host "Your current PowerShell Execution Policy is set to Restricted, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
+# Check if PowerShell execution is Restricted or AllSigned or Undefined
+$needchange = @("AllSigned", "Restricted", "Undefined")
+$curpolicy = Get-ExecutionPolicy
+if ($curpolicy -in $needchange) {
+    Write-Host "Your current PowerShell Execution Policy is set to $curpolicy, which prevents scripts from running. Do you want to change it to RemoteSigned? (yes/no)"
     $response = Read-Host
     if ($response -eq 'yes') {
-        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
+        Set-ExecutionPolicy RemoteSigned -Scope Process -Confirm:$false
     } else {
         Write-Host "The script cannot be run without changing the execution policy. Exiting..."
         exit
@@ -107,8 +109,9 @@ try {
     # This block will catch the error and suppress it.
 }
 New-Item -ItemType Directory -Force -Path "$ScratchDisk\scratchdir" > $null
-Mount-WindowsImage -ImagePath $ScratchDisk\tiny11\sources\install.wim -Index $index -Path $ScratchDisk\scratchdir
+Mount-WindowsImage -ImagePath $wimFilePath -Index $index -Path $ScratchDisk\scratchdir
 
+# Powershell dism module does not have direct equivalent for /Get-Intl
 $imageIntl = & dism /English /Get-Intl "/Image:$($ScratchDisk)\scratchdir"
 $languageLine = $imageIntl -split '\n' | Where-Object { $_ -match 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})' }
 
@@ -119,33 +122,28 @@ if ($languageLine) {
     Write-Host "Default system UI language code not found."
 }
 
-$imageInfo = & 'dism' '/English' '/Get-WimInfo' "/wimFile:$($ScratchDisk)\tiny11\sources\install.wim" "/index:$index"
-$lines = $imageInfo -split '\r?\n'
-
-foreach ($line in $lines) {
-    if ($line -like '*Architecture : *') {
-        $architecture = $line -replace 'Architecture : ',''
-        # If the architecture is x64, replace it with amd64
-        if ($architecture -eq 'x64') {
-            $architecture = 'amd64'
-        }
-        Write-Host "Architecture: $architecture"
-        break
-    }
+# Defined in (Microsoft.Dism.Commands.ImageInfoObject).Architecture formatting script
+# 0 -> x86, 5 -> arm(currently unused), 6 -> ia64(currently unused), 9 -> x64, 12 -> arm64
+switch ((Get-WindowsImage -ImagePath $wimFilePath -Index $index).Architecture) 
+{
+    0 { $architecture = "x86" }
+    9 { $architecture = "amd64" }
+    12 { $architecture = "arm64" }
 }
 
-if (-not $architecture) {
+if ($architecture) {
+    Write-Host "Architecture: $architecture"
+} else {
     Write-Host "Architecture information not found."
 }
 
-Write-Host "Mounting complete! Performing removal of applications..."
+Write-Host "Mounting complete! Performing removal of applications...`n"
 
-$packages = & 'dism' '/English' "/image:$($ScratchDisk)\scratchdir" '/Get-ProvisionedAppxPackages' |
+$packages = Get-ProvisionedAppxPackage -Path "$ScratchDisk\scratchdir" |
     ForEach-Object {
-        if ($_ -match 'PackageName : (.*)') {
-            $matches[1]
-        }
+        $_.PackageName
     }
+
 $packagePrefixes = 
     'Clipchamp.Clipchamp_', 
     'Microsoft.BingNews_', 
@@ -187,11 +185,12 @@ $packagesToRemove = $packages | Where-Object {
     $packagePrefixes -contains ($packagePrefixes | Where-Object { $packageName -like "$_*" })
 }
 foreach ($package in $packagesToRemove) {
-    & 'dism' '/English' "/image:$($ScratchDisk)\scratchdir" '/Remove-ProvisionedAppxPackage' "/PackageName:$package"
+    Write-Host "Removing $package..."
+    Remove-AppxProvisionedPackage -Path "$ScratchDisk\scratchdir" -PackageName "$package" | Out-Null
 }
 
 
-Write-Host "Removing Edge:"
+Write-Host "`nRemoving Edge:"
 Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\Edge" -Recurse -Force | Out-Null
 Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeUpdate" -Recurse -Force | Out-Null
 Remove-Item -Path "$ScratchDisk\scratchdir\Program Files (x86)\Microsoft\EdgeCore" -Recurse -Force | Out-Null
@@ -433,10 +432,10 @@ Write-Host ' '
 Write-Host "Unmounting image..."
 Dismount-WindowsImage -Path $ScratchDisk\scratchdir -Save
 Write-Host "Exporting image..."
-# Compressiontype Recovery is not supported with PShell https://learn.microsoft.com/en-us/powershell/module/dism/export-windowsimage?view=windowsserver2022-ps#-compressiontype
-Export-WindowsImage -SourceImagePath $ScratchDisk\tiny11\sources\install.wim -SourceIndex $index -DestinationImagePath $ScratchDisk\tiny11\sources\install2.wim -CompressionType Fast
-Remove-Item -Path "$ScratchDisk\tiny11\sources\install.wim" -Force | Out-Null
-Rename-Item -Path "$ScratchDisk\tiny11\sources\install2.wim" -NewName "install.wim" | Out-Null
+# Run `Export-WindowsImage` with undocumented CompressionType "LZMS" (which is the same compression used for Recovery from dism.exe)
+Export-WindowsImage -SourceImagePath "$ScratchDisk\tiny11\sources\install.wim" -SourceIndex "$index" -DestinationImagePath "$ScratchDisk\tiny11\sources\install2.wim" -CompressionType "LZMS"
+Move-Item -Path "$ScratchDisk\tiny11\sources\install2.wim" -Destination "$ScratchDisk\tiny11\sources\install.wim" -Force | Out-Null
+
 Write-Host "Windows image completed. Continuing with boot.wim."
 Start-Sleep -Seconds 2
 Clear-Host
@@ -481,22 +480,32 @@ Write-Host "The tiny11 image is now completed. Proceeding with the making of the
 Write-Host "Copying unattended file for bypassing MS account on OOBE..."
 Copy-Item -Path "$PSScriptRoot\autounattend.xml" -Destination "$ScratchDisk\tiny11\autounattend.xml" -Force | Out-Null
 Write-Host "Creating ISO image..."
-$ADKDepTools = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\$hostarchitecture\Oscdimg"
+# Get Windows ADK path from registry(following Visual Studio's winsdk.bat approach).
+$WinSDKPath = [Microsoft.Win32.Registry]::GetValue("HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows Kits\Installed Roots", "KitsRoot10", $null)
+if (!$WinSDKPath) {
+    $WinSDKPath = [Microsoft.Win32.Registry]::GetValue("HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Kits\Installed Roots", "KitsRoot10", $null)
+}
+
+if ($WinSDKPath) {
+    # Trim the following backslash for path concatenation.
+    $WinSDKPath = $WinSDKPath.TrimEnd('\')
+    $ADKDepTools = "$WinSDKPath\Assessment and Deployment Kit\Deployment Tools\$hostarchitecture\Oscdimg"
+}
 $localOSCDIMGPath = "$PSScriptRoot\oscdimg.exe"
 
-if ([System.IO.Directory]::Exists($ADKDepTools)) {
+if ($ADKDepTools -and [System.IO.File]::Exists("$ADKDepTools\oscdimg.exe")) {
     Write-Host "Will be using oscdimg.exe from system ADK."
     $OSCDIMG = "$ADKDepTools\oscdimg.exe"
 } else {
-    Write-Host "ADK folder not found. Will be using bundled oscdimg.exe."
+    Write-Host "oscdimg.exe from system ADK not found. Will be using bundled oscdimg.exe."
     
     $url = "https://msdl.microsoft.com/download/symbols/oscdimg.exe/3D44737265000/oscdimg.exe"
 
-    if (-not (Test-Path -Path $localOSCDIMGPath)) {
+    if (![System.IO.File]::Exists($localOSCDIMGPath)) {
         Write-Host "Downloading oscdimg.exe..."
         Invoke-WebRequest -Uri $url -OutFile $localOSCDIMGPath
 
-        if (Test-Path $localOSCDIMGPath) {
+        if ([System.IO.File]::Exists($localOSCDIMGPath)) {
             Write-Host "oscdimg.exe downloaded successfully."
         } else {
             Write-Error "Failed to download oscdimg.exe."
