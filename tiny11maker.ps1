@@ -178,7 +178,8 @@ $packagePrefixes =
     'MicrosoftCorporationII.QuickAssist_', 
     'MicrosoftTeams_', 
     'Microsoft.549981C3F5F10_',
-    'MSTeams_'
+    'MSTeams_',
+    'MicrosoftWindows.Client.WebExperience_'
 
 $packagesToRemove = $packages | Where-Object {
     $packageName = $_
